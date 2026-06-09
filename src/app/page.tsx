@@ -4,7 +4,14 @@ import { useMemo, useState } from "react";
 
 type Mode = "embed" | "v2" | "json";
 type JsonPayload = Record<string, unknown>;
-type LinkButton = { id: string; label: string; url: string; emoji: string };
+type DiscordButton = {
+  id: string;
+  label: string;
+  emoji: string;
+  buttonType: "link" | "primary" | "secondary" | "success" | "danger";
+  url?: string;
+  customId?: string;
+};
 type GalleryItem = { id: string; url: string };
 type EmbedField = { id: string; name: string; value: string; inline: boolean };
 type EmbedBlock = {
@@ -98,6 +105,22 @@ function defaultEmbed(): EmbedBlock {
   };
 }
 
+type V2Component =
+  | { id: string; type: "text_display"; content: string }
+  | { id: string; type: "section"; content: string; thumbnail: string }
+  | { id: string; type: "separator"; divider: boolean; spacing: number };
+
+function getButtonStyle(buttonType: DiscordButton["buttonType"]) {
+  switch (buttonType) {
+    case "primary": return 1;
+    case "secondary": return 2;
+    case "success": return 3;
+    case "danger": return 4;
+    case "link": return 5;
+    default: return 1;
+  }
+}
+
 export default function Home() {
   const [mode, setMode] = useState<Mode>("embed");
   const [webhookUrl, setWebhookUrl] = useState("");
@@ -110,18 +133,20 @@ export default function Home() {
   const [embeds, setEmbeds] = useState<EmbedBlock[]>([defaultEmbed()]);
 
   const [accent, setAccent] = useState("#5865F2");
-  const [title, setTitle] = useState("## 👋 Welcome to BetterEmbeds");
-  const [body, setBody] = useState("Thanks for purchasing BetterEmbeds. This message is built with Discord Components V2 using containers, text displays, sections, separators, media galleries, and link buttons.");
-  const [notice, setNotice] = useState("### 🚀 Quick Start\nEdit the layout, paste your webhook, preview the message, then copy or send the JSON directly.");
-  const [thumbnail, setThumbnail] = useState("https://cdn.discordapp.com/embed/avatars/0.png");
+  const [v2Components, setV2Components] = useState<V2Component[]>([
+    { id: id(), type: "text_display", content: "## 👋 Welcome to BetterEmbeds" },
+    { id: id(), type: "separator", divider: true, spacing: 1 },
+    { id: id(), type: "text_display", content: "Thanks for purchasing BetterEmbeds. This message is built with Discord Components V2 using containers, text displays, sections, separators, media galleries, and link buttons." },
+    { id: id(), type: "section", content: "### 🚀 Quick Start\nEdit the layout, paste your webhook, preview the message, then copy or send the JSON directly.", thumbnail: "https://cdn.discordapp.com/embed/avatars/0.png" }
+  ]);
   const [includeGallery, setIncludeGallery] = useState(true);
   const [gallery, setGallery] = useState<GalleryItem[]>([
     { id: id(), url: "https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=900&auto=format&fit=crop" },
     { id: id(), url: "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?w=900&auto=format&fit=crop" }
   ]);
-  const [buttons, setButtons] = useState<LinkButton[]>([
-    { id: id(), label: "Documentation", url: "https://discord.com/developers/docs/components/overview", emoji: "📘" },
-    { id: id(), label: "Support", url: "https://discord.com", emoji: "💬" }
+  const [buttons, setButtons] = useState<DiscordButton[]>([
+    { id: id(), label: "Documentation", url: "https://discord.com/developers/docs/components/overview", emoji: "📘", buttonType: "link" },
+    { id: id(), label: "Support", url: "https://discord.com", emoji: "💬", buttonType: "link" }
   ]);
 
   const embedPayload = useMemo<JsonPayload>(() => {
@@ -146,9 +171,10 @@ export default function Home() {
       .map((button) =>
         dropEmpty({
           type: 2,
-          style: 5,
+          style: getButtonStyle(button.buttonType),
           label: trim(button.label) || "Open",
-          url: trim(button.url) || "https://discord.com",
+          url: button.buttonType === "link" ? trim(button.url || "") || "https://discord.com" : undefined,
+          custom_id: button.buttonType !== "link" ? trim(button.customId || "") || id() : undefined,
           emoji: emoji(button.emoji)
         })
       )
@@ -163,18 +189,22 @@ export default function Home() {
   }, [buttons, embeds, messageContent]);
 
   const v2Payload = useMemo<JsonPayload>(() => {
-    const container: Record<string, unknown>[] = [
-      { type: 10, content: trim(title) || "## BetterEmbeds" },
-      { type: 14, divider: true, spacing: 1 },
-      { type: 10, content: trim(body) || "Write your message here." },
-      {
-        type: 9,
-        components: [{ type: 10, content: trim(notice) || "### Quick Start" }],
-        accessory: trim(thumbnail)
-          ? { type: 11, media: { url: trim(thumbnail) }, description: "BetterEmbeds preview" }
-          : { type: 2, style: 5, label: "Open Docs", url: "https://discord.com/developers/docs/components/overview" }
+    const container: Record<string, unknown>[] = v2Components.map((component) => {
+      if (component.type === "text_display") {
+        return { type: 10, content: trim(component.content) || "Write your message here." };
+      } else if (component.type === "separator") {
+        return { type: 14, divider: component.divider, spacing: component.spacing };
+      } else if (component.type === "section") {
+        return {
+          type: 9,
+          components: [{ type: 10, content: trim(component.content) || "### Quick Start" }],
+          accessory: trim(component.thumbnail)
+            ? { type: 11, media: { url: trim(component.thumbnail) }, description: "BetterEmbeds preview" }
+            : undefined
+        };
       }
-    ];
+      return {};
+    }).filter(item => Object.keys(item).length > 0);
 
     const galleryItems = gallery
       .map((item) => trim(item.url))
@@ -191,9 +221,10 @@ export default function Home() {
       .map((button) =>
         dropEmpty({
           type: 2,
-          style: 5,
+          style: getButtonStyle(button.buttonType),
           label: trim(button.label) || "Open",
-          url: trim(button.url) || "https://discord.com",
+          url: button.buttonType === "link" ? trim(button.url || "") || "https://discord.com" : undefined,
+          custom_id: button.buttonType !== "link" ? trim(button.customId || "") || id() : undefined,
           emoji: emoji(button.emoji)
         })
       )
@@ -214,7 +245,7 @@ export default function Home() {
         }
       ]
     };
-  }, [accent, body, buttons, gallery, includeGallery, notice, thumbnail, title]);
+  }, [accent, buttons, gallery, includeGallery, v2Components]);
 
   const builderPayload = mode === "v2" ? v2Payload : embedPayload;
   const payload = customPayload || builderPayload;
@@ -390,7 +421,7 @@ export default function Home() {
                     </div>
                     <div className="formGrid two">
                       <label>Title<input value={embed.title} onChange={(event) => updateEmbed(embed.id, { title: event.target.value })} /></label>
-                      <label>Color<input value={embed.color} onChange={(event) => updateEmbed(embed.id, { color: event.target.value })} /></label>
+                      <label>Color<input type="color" value={embed.color} onChange={(event) => updateEmbed(embed.id, { color: event.target.value })} /></label>
                     </div>
                     <label>Description<textarea value={embed.description} onChange={(event) => updateEmbed(embed.id, { description: event.target.value })} /></label>
                     <div className="formGrid two">
@@ -431,13 +462,83 @@ export default function Home() {
                       <p>Container with Text Display, Separator, Section, Thumbnail, Media Gallery and Action Row.</p>
                     </div>
                   </div>
-                  <div className="formGrid two">
-                    <label>Accent color<input value={accent} onChange={(event) => { setCustomPayload(null); setAccent(event.target.value); }} /></label>
-                    <label>Thumbnail URL<input value={thumbnail} onChange={(event) => { setCustomPayload(null); setThumbnail(event.target.value); }} /></label>
+                  <label>Accent color<input type="color" value={accent} onChange={(event) => { setCustomPayload(null); setAccent(event.target.value); }} /></label>
+                </div>
+
+                {v2Components.map((component, index) => (
+                  <div className="panel" key={component.id}>
+                    <div className="panelHead">
+                      <div>
+                        <h2>{component.type === "text_display" ? "Text Display" : component.type === "section" ? "Section" : "Separator"}</h2>
+                        <p>{component.type === "text_display" ? "Markdown supported" : component.type === "section" ? "Text with optional thumbnail" : "Visual break"}</p>
+                      </div>
+                      <div className="miniActions">
+                        <button onClick={() => {
+                          setCustomPayload(null);
+                          setV2Components((current) => {
+                            const newComponents = [...current];
+                            if (index > 0) {
+                              const temp = newComponents[index - 1];
+                              newComponents[index - 1] = newComponents[index];
+                              newComponents[index] = temp;
+                            }
+                            return newComponents;
+                          });
+                        }} disabled={index === 0}>Move Up</button>
+                        <button onClick={() => {
+                          setCustomPayload(null);
+                          setV2Components((current) => {
+                            const newComponents = [...current];
+                            if (index < current.length - 1) {
+                              const temp = newComponents[index + 1];
+                              newComponents[index + 1] = newComponents[index];
+                              newComponents[index] = temp;
+                            }
+                            return newComponents;
+                          });
+                        }} disabled={index === v2Components.length - 1}>Move Down</button>
+                        <button onClick={() => { setCustomPayload(null); setV2Components((current) => current.filter((item) => item.id !== component.id)); }}>Remove</button>
+                      </div>
+                    </div>
+                    {component.type === "text_display" && (
+                      <label>Content<textarea value={component.content} onChange={(event) => {
+                        setCustomPayload(null);
+                        setV2Components((current) => current.map((item) => item.id === component.id ? { ...item, content: event.target.value } : item));
+                      }} /></label>
+                    )}
+                    {component.type === "section" && (
+                      <>
+                        <label>Content<textarea value={component.content} onChange={(event) => {
+                          setCustomPayload(null);
+                          setV2Components((current) => current.map((item) => item.id === component.id ? { ...item, content: event.target.value } : item));
+                        }} /></label>
+                        <label>Thumbnail URL<input value={component.thumbnail} onChange={(event) => {
+                          setCustomPayload(null);
+                          setV2Components((current) => current.map((item) => item.id === component.id ? { ...item, thumbnail: event.target.value } : item));
+                        }} /></label>
+                      </>
+                    )}
+                    {component.type === "separator" && (
+                      <div className="formGrid two">
+                        <label className="toggle"><input type="checkbox" checked={component.divider} onChange={(event) => {
+                          setCustomPayload(null);
+                          setV2Components((current) => current.map((item) => item.id === component.id ? { ...item, divider: event.target.checked } : item));
+                        }} /> Divider</label>
+                        <label>Spacing<input type="number" value={component.spacing} onChange={(event) => {
+                          setCustomPayload(null);
+                          setV2Components((current) => current.map((item) => item.id === component.id ? { ...item, spacing: Number(event.target.value) } : item));
+                        }} /></label>
+                      </div>
+                    )}
                   </div>
-                  <label>Title / Text Display<textarea value={title} onChange={(event) => { setCustomPayload(null); setTitle(event.target.value); }} /></label>
-                  <label>Body / Text Display<textarea value={body} onChange={(event) => { setCustomPayload(null); setBody(event.target.value); }} /></label>
-                  <label>Section text<textarea value={notice} onChange={(event) => { setCustomPayload(null); setNotice(event.target.value); }} /></label>
+                ))}
+
+                <div className="panel">
+                  <div className="miniActions">
+                    <button onClick={() => { setCustomPayload(null); setV2Components((current) => [...current, { id: id(), type: "text_display", content: "New Text Display" }]); }}>+ Add Text Display</button>
+                    <button onClick={() => { setCustomPayload(null); setV2Components((current) => [...current, { id: id(), type: "section", content: "New Section", thumbnail: "" }]); }}>+ Add Section</button>
+                    <button onClick={() => { setCustomPayload(null); setV2Components((current) => [...current, { id: id(), type: "separator", divider: true, spacing: 1 }]); }}>+ Add Separator</button>
+                  </div>
                 </div>
 
                 <div className="panel">
@@ -505,7 +606,12 @@ export default function Home() {
   );
 }
 
-function SharedButtons({ buttons, setButtons, setCustomPayload }: { buttons: LinkButton[]; setButtons: React.Dispatch<React.SetStateAction<LinkButton[]>>; setCustomPayload: React.Dispatch<React.SetStateAction<JsonPayload | null>> }) {
+function SharedButtons({ buttons, setButtons, setCustomPayload }: { buttons: DiscordButton[]; setButtons: React.Dispatch<React.SetStateAction<DiscordButton[]>>; setCustomPayload: React.Dispatch<React.SetStateAction<JsonPayload | null>> }) {
+  function updateButton(buttonId: string, values: Partial<DiscordButton>) {
+    setCustomPayload(null);
+    setButtons((current) => current.map((button) => (button.id === buttonId ? { ...button, ...values } : button)));
+  }
+
   return (
     <div className="panel">
       <div className="panelHead">
@@ -513,14 +619,25 @@ function SharedButtons({ buttons, setButtons, setCustomPayload }: { buttons: Lin
           <h2>Buttons</h2>
           <p>Webhook-safe link buttons. Custom ID buttons and select menus need a Discord app interaction endpoint.</p>
         </div>
-        <button onClick={() => setButtons((current) => [...current, { id: id(), label: "New Button", url: "https://discord.com", emoji: "✨" }].slice(0, 5))}>+ Button</button>
+        <button onClick={() => setButtons((current) => [...current, { id: id(), label: "New Button", emoji: "✨", buttonType: "link" as "link", url: "https://discord.com" }].slice(0, 5))}>+ Button</button>
       </div>
       <div className="fieldList">
         {buttons.map((button) => (
           <div className="fieldBox four" key={button.id}>
-            <input value={button.emoji} onChange={(event) => { setCustomPayload(null); setButtons((current) => current.map((b) => b.id === button.id ? { ...b, emoji: event.target.value } : b)); }} placeholder="Emoji" />
-            <input value={button.label} onChange={(event) => { setCustomPayload(null); setButtons((current) => current.map((b) => b.id === button.id ? { ...b, label: event.target.value } : b)); }} placeholder="Label" />
-            <input value={button.url} onChange={(event) => { setCustomPayload(null); setButtons((current) => current.map((b) => b.id === button.id ? { ...b, url: event.target.value } : b)); }} placeholder="URL" />
+            <input value={button.emoji} onChange={(event) => updateButton(button.id, { emoji: event.target.value })} placeholder="Emoji" />
+            <input value={button.label} onChange={(event) => updateButton(button.id, { label: event.target.value })} placeholder="Label" />
+            <select value={button.buttonType} onChange={(event) => updateButton(button.id, { buttonType: event.target.value as DiscordButton["buttonType"], url: undefined, customId: undefined })}>
+              <option value="link">Link</option>
+              <option value="primary">Primary</option>
+              <option value="secondary">Secondary</option>
+              <option value="success">Success</option>
+              <option value="danger">Danger</option>
+            </select>
+            {button.buttonType === "link" ? (
+              <input value={button.url} onChange={(event) => updateButton(button.id, { url: event.target.value })} placeholder="URL" />
+            ) : (
+              <input value={button.customId} onChange={(event) => updateButton(button.id, { customId: event.target.value })} placeholder="Custom ID" />
+            )}
             <button onClick={() => setButtons((current) => current.filter((b) => b.id !== button.id))}>Remove</button>
           </div>
         ))}
@@ -644,7 +761,17 @@ function RenderComponent({ component }: { component: Record<string, unknown> }) 
   if (type === 2) {
     const label = typeof component.label === "string" ? component.label : "Button";
     const e = component.emoji && typeof component.emoji === "object" ? (component.emoji as Record<string, unknown>).name : "";
-    return <button>{String(e || "")} {label}</button>;
+    const style = Number(component.style);
+    const url = typeof component.url === "string" ? component.url : "";
+    const customId = typeof component.custom_id === "string" ? component.custom_id : "";
+
+    const buttonClass = `discordButton style-${style}`;
+
+    if (style === 5) { // Link button
+      return <a href={url} target="_blank" rel="noopener noreferrer" className={buttonClass}>{String(e || "")} {label}</a>;
+    } else { // Interactive button
+      return <button className={buttonClass}>{String(e || "")} {label}</button>;
+    }
   }
 
   if ([3, 5, 6, 7, 8].includes(type)) {
