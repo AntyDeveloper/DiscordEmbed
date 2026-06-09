@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 type Mode = "embed" | "v2" | "json";
 type JsonPayload = Record<string, unknown>;
@@ -105,10 +105,23 @@ function defaultEmbed(): EmbedBlock {
   };
 }
 
+type SectionAccessoryType = "none" | "thumbnail" | "button";
 type V2Component =
   | { id: string; type: "text_display"; content: string }
-  | { id: string; type: "section"; content: string; thumbnail: string }
-  | { id: string; type: "separator"; divider: boolean; spacing: number };
+  | {
+      id: string;
+      type: "section";
+      content: string;
+      accessoryType: SectionAccessoryType;
+      thumbnail: string;
+      buttonLabel: string;
+      buttonEmoji: string;
+      buttonButtonType: DiscordButton["buttonType"];
+      buttonUrl: string;
+      buttonCustomId: string;
+    }
+  | { id: string; type: "separator"; divider: boolean; spacing: number }
+  | { id: string; type: "action_row"; buttons: DiscordButton[] };
 
 function getButtonStyle(buttonType: DiscordButton["buttonType"]) {
   switch (buttonType) {
@@ -133,11 +146,13 @@ export default function Home() {
   const [embeds, setEmbeds] = useState<EmbedBlock[]>([defaultEmbed()]);
 
   const [accent, setAccent] = useState("#5865F2");
+  const dragIndexRef = useRef<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const [v2Components, setV2Components] = useState<V2Component[]>([
     { id: id(), type: "text_display", content: "## 👋 Welcome to BetterEmbeds" },
     { id: id(), type: "separator", divider: true, spacing: 1 },
     { id: id(), type: "text_display", content: "Thanks for purchasing BetterEmbeds. This message is built with Discord Components V2 using containers, text displays, sections, separators, media galleries, and link buttons." },
-    { id: id(), type: "section", content: "### 🚀 Quick Start\nEdit the layout, paste your webhook, preview the message, then copy or send the JSON directly.", thumbnail: "https://cdn.discordapp.com/embed/avatars/0.png" }
+    { id: id(), type: "section", content: "### 🚀 Quick Start\nEdit the layout, paste your webhook, preview the message, then copy or send the JSON directly.", accessoryType: "thumbnail" as SectionAccessoryType, thumbnail: "https://cdn.discordapp.com/embed/avatars/0.png", buttonLabel: "", buttonEmoji: "🔗", buttonButtonType: "link", buttonUrl: "https://discord.com", buttonCustomId: "" }
   ]);
   const [includeGallery, setIncludeGallery] = useState(true);
   const [gallery, setGallery] = useState<GalleryItem[]>([
@@ -189,22 +204,50 @@ export default function Home() {
   }, [buttons, embeds, messageContent]);
 
   const v2Payload = useMemo<JsonPayload>(() => {
-    const container: Record<string, unknown>[] = v2Components.map((component) => {
+    const container: Record<string, unknown>[] = [];
+
+    for (const component of v2Components) {
       if (component.type === "text_display") {
-        return { type: 10, content: trim(component.content) || "Write your message here." };
+        container.push({ type: 10, content: trim(component.content) || "Write your message here." });
       } else if (component.type === "separator") {
-        return { type: 14, divider: component.divider, spacing: component.spacing };
+        container.push({ type: 14, divider: component.divider, spacing: component.spacing });
       } else if (component.type === "section") {
-        return {
+        let accessory: Record<string, unknown> | undefined;
+        if (component.accessoryType === "button") {
+          accessory = dropEmpty({
+            type: 2,
+            style: getButtonStyle(component.buttonButtonType),
+            label: trim(component.buttonLabel) || "Button",
+            url: component.buttonButtonType === "link" ? trim(component.buttonUrl) || "https://discord.com" : undefined,
+            custom_id: component.buttonButtonType !== "link" ? trim(component.buttonCustomId) || id() : undefined,
+            emoji: emoji(component.buttonEmoji)
+          });
+        } else if (component.accessoryType === "thumbnail" && trim(component.thumbnail)) {
+          accessory = { type: 11, media: { url: trim(component.thumbnail) }, description: "BetterEmbeds preview" };
+        }
+        container.push({
           type: 9,
           components: [{ type: 10, content: trim(component.content) || "### Quick Start" }],
-          accessory: trim(component.thumbnail)
-            ? { type: 11, media: { url: trim(component.thumbnail) }, description: "BetterEmbeds preview" }
-            : undefined
-        };
+          accessory
+        });
+      } else if (component.type === "action_row") {
+        const rowButtons = component.buttons
+          .map((button) =>
+            dropEmpty({
+              type: 2,
+              style: getButtonStyle(button.buttonType),
+              label: trim(button.label) || "Open",
+              url: button.buttonType === "link" ? trim(button.url || "") || "https://discord.com" : undefined,
+              custom_id: button.buttonType !== "link" ? trim(button.customId || "") || id() : undefined,
+              emoji: emoji(button.emoji)
+            })
+          )
+          .slice(0, 5);
+        if (rowButtons.length) {
+          container.push({ type: 1, components: rowButtons });
+        }
       }
-      return {};
-    }).filter(item => Object.keys(item).length > 0);
+    }
 
     const galleryItems = gallery
       .map((item) => trim(item.url))
@@ -217,24 +260,6 @@ export default function Home() {
       container.push({ type: 12, items: galleryItems });
     }
 
-    const safeButtons = buttons
-      .map((button) =>
-        dropEmpty({
-          type: 2,
-          style: getButtonStyle(button.buttonType),
-          label: trim(button.label) || "Open",
-          url: button.buttonType === "link" ? trim(button.url || "") || "https://discord.com" : undefined,
-          custom_id: button.buttonType !== "link" ? trim(button.customId || "") || id() : undefined,
-          emoji: emoji(button.emoji)
-        })
-      )
-      .slice(0, 5);
-
-    if (safeButtons.length) {
-      container.push({ type: 14, divider: false, spacing: 1 });
-      container.push({ type: 1, components: safeButtons });
-    }
-
     return {
       flags: COMPONENTS_V2_FLAG,
       components: [
@@ -245,7 +270,7 @@ export default function Home() {
         }
       ]
     };
-  }, [accent, buttons, gallery, includeGallery, v2Components]);
+  }, [accent, gallery, includeGallery, v2Components]);
 
   const builderPayload = mode === "v2" ? v2Payload : embedPayload;
   const payload = customPayload || builderPayload;
@@ -278,6 +303,23 @@ export default function Home() {
     setCustomPayload(null);
     setRawJson(JSON.stringify(builderPayload, null, 2));
     setStatus({ text: "Back to the visual builder." });
+  }
+
+  function clearContent() {
+    setCustomPayload(null);
+    setStatus(null);
+    if (mode === "embed") {
+      setMessageContent("");
+      setEmbeds([defaultEmbed()]);
+      setButtons([]);
+    } else if (mode === "v2") {
+      setV2Components([{ id: id(), type: "text_display", content: "" }]);
+      setAccent("#5865F2");
+      setGallery([]);
+      setIncludeGallery(false);
+    } else if (mode === "json") {
+      setRawJson("");
+    }
   }
 
   async function copyJson() {
@@ -361,10 +403,6 @@ export default function Home() {
         <button className={mode === "embed" ? "active navButton" : "navButton"} onClick={() => switchMode("embed")}>Embed V1</button>
         <button className={mode === "v2" ? "active navButton" : "navButton"} onClick={() => switchMode("v2")}>Components V2</button>
         <button className={mode === "json" ? "active navButton" : "navButton"} onClick={() => switchMode("json")}>JSON</button>
-        <div className="credits">
-          <span>Credits</span>
-          <strong>Made by: ashwa_o</strong>
-        </div>
       </aside>
 
       <section className="workspace">
@@ -382,6 +420,7 @@ export default function Home() {
 
         <div className="webhookBar">
           <input value={webhookUrl} onChange={(event) => setWebhookUrl(event.target.value)} placeholder="Discord webhook URL" />
+          <button onClick={clearContent} title="Clear current message content">Clear</button>
           {status && <span className={status.error ? "status error" : "status"}>{status.text}</span>}
         </div>
 
@@ -459,44 +498,73 @@ export default function Home() {
                   <div className="panelHead">
                     <div>
                       <h2>Components V2</h2>
-                      <p>Container with Text Display, Separator, Section, Thumbnail, Media Gallery and Action Row.</p>
+                      <p>Container with Text Display, Separator, Section, Thumbnail, Media Gallery and Action Row. Buttons can be placed anywhere.</p>
                     </div>
                   </div>
                   <label>Accent color<input type="color" value={accent} onChange={(event) => { setCustomPayload(null); setAccent(event.target.value); }} /></label>
                 </div>
 
                 {v2Components.map((component, index) => (
-                  <div className="panel" key={component.id}>
+                  <div
+                    className="panel"
+                    key={component.id}
+                    draggable
+                    onDragStart={(e) => {
+                      dragIndexRef.current = index;
+                      e.dataTransfer.effectAllowed = "move";
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      setDragOverIndex(index);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const from = dragIndexRef.current;
+                      if (from === null || from === index) return;
+                      setCustomPayload(null);
+                      setV2Components((current) => {
+                        const next = [...current];
+                        const [moved] = next.splice(from, 1);
+                        next.splice(index, 0, moved);
+                        return next;
+                      });
+                      dragIndexRef.current = null;
+                      setDragOverIndex(null);
+                    }}
+                    onDragEnd={() => {
+                      dragIndexRef.current = null;
+                      setDragOverIndex(null);
+                    }}
+                    style={{
+                      opacity: dragIndexRef.current === index ? 0.4 : 1,
+                      outline: dragOverIndex === index && dragIndexRef.current !== index ? "2px solid #5865F2" : undefined,
+                      transition: "outline 0.1s"
+                    }}
+                  >
                     <div className="panelHead">
-                      <div>
-                        <h2>{component.type === "text_display" ? "Text Display" : component.type === "section" ? "Section" : "Separator"}</h2>
-                        <p>{component.type === "text_display" ? "Markdown supported" : component.type === "section" ? "Text with optional thumbnail" : "Visual break"}</p>
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                        <span
+                          title="Drag to reorder"
+                          style={{ cursor: "grab", fontSize: "1.1rem", opacity: 0.4, userSelect: "none", lineHeight: 1 }}
+                          onMouseDown={(e) => e.stopPropagation()}
+                        >⠿</span>
+                        <div>
+                          <h2>
+                            {component.type === "text_display" ? "Text Display"
+                              : component.type === "section" ? "Section"
+                              : component.type === "action_row" ? "Action Row (Buttons)"
+                              : "Separator"}
+                          </h2>
+                          <p>
+                            {component.type === "text_display" ? "Markdown supported"
+                              : component.type === "section" ? "Text with optional accessory"
+                              : component.type === "action_row" ? `${component.buttons.length}/5 buttons`
+                              : "Visual break"}
+                          </p>
+                        </div>
                       </div>
                       <div className="miniActions">
-                        <button onClick={() => {
-                          setCustomPayload(null);
-                          setV2Components((current) => {
-                            const newComponents = [...current];
-                            if (index > 0) {
-                              const temp = newComponents[index - 1];
-                              newComponents[index - 1] = newComponents[index];
-                              newComponents[index] = temp;
-                            }
-                            return newComponents;
-                          });
-                        }} disabled={index === 0}>Move Up</button>
-                        <button onClick={() => {
-                          setCustomPayload(null);
-                          setV2Components((current) => {
-                            const newComponents = [...current];
-                            if (index < current.length - 1) {
-                              const temp = newComponents[index + 1];
-                              newComponents[index + 1] = newComponents[index];
-                              newComponents[index] = temp;
-                            }
-                            return newComponents;
-                          });
-                        }} disabled={index === v2Components.length - 1}>Move Down</button>
                         <button onClick={() => { setCustomPayload(null); setV2Components((current) => current.filter((item) => item.id !== component.id)); }}>Remove</button>
                       </div>
                     </div>
@@ -512,10 +580,40 @@ export default function Home() {
                           setCustomPayload(null);
                           setV2Components((current) => current.map((item) => item.id === component.id ? { ...item, content: event.target.value } : item));
                         }} /></label>
-                        <label>Thumbnail URL<input value={component.thumbnail} onChange={(event) => {
-                          setCustomPayload(null);
-                          setV2Components((current) => current.map((item) => item.id === component.id ? { ...item, thumbnail: event.target.value } : item));
-                        }} /></label>
+                        <label>Accessory
+                          <select value={component.accessoryType} onChange={(e) => {
+                            setCustomPayload(null);
+                            setV2Components((current) => current.map((item) => item.id === component.id ? { ...item, accessoryType: e.target.value as SectionAccessoryType } : item));
+                          }}>
+                            <option value="none">None</option>
+                            <option value="thumbnail">Thumbnail (image)</option>
+                            <option value="button">Button</option>
+                          </select>
+                        </label>
+                        {component.accessoryType === "thumbnail" && (
+                          <label>Thumbnail URL<input value={component.thumbnail} onChange={(event) => {
+                            setCustomPayload(null);
+                            setV2Components((current) => current.map((item) => item.id === component.id ? { ...item, thumbnail: event.target.value } : item));
+                          }} placeholder="https://..." /></label>
+                        )}
+                        {component.accessoryType === "button" && (
+                          <div className="fieldBox four">
+                            <input value={component.buttonEmoji} onChange={(e) => { setCustomPayload(null); setV2Components((c) => c.map((item) => item.id === component.id ? { ...item, buttonEmoji: e.target.value } : item)); }} placeholder="Emoji" />
+                            <input value={component.buttonLabel} onChange={(e) => { setCustomPayload(null); setV2Components((c) => c.map((item) => item.id === component.id ? { ...item, buttonLabel: e.target.value } : item)); }} placeholder="Label" />
+                            <select value={component.buttonButtonType} onChange={(e) => { setCustomPayload(null); setV2Components((c) => c.map((item) => item.id === component.id ? { ...item, buttonButtonType: e.target.value as DiscordButton["buttonType"], buttonUrl: "", buttonCustomId: "" } : item)); }}>
+                              <option value="link">Link</option>
+                              <option value="primary">Primary</option>
+                              <option value="secondary">Secondary</option>
+                              <option value="success">Success</option>
+                              <option value="danger">Danger</option>
+                            </select>
+                            {component.buttonButtonType === "link" ? (
+                              <input value={component.buttonUrl} onChange={(e) => { setCustomPayload(null); setV2Components((c) => c.map((item) => item.id === component.id ? { ...item, buttonUrl: e.target.value } : item)); }} placeholder="URL" />
+                            ) : (
+                              <input value={component.buttonCustomId} onChange={(e) => { setCustomPayload(null); setV2Components((c) => c.map((item) => item.id === component.id ? { ...item, buttonCustomId: e.target.value } : item)); }} placeholder="Custom ID" />
+                            )}
+                          </div>
+                        )}
                       </>
                     )}
                     {component.type === "separator" && (
@@ -530,14 +628,26 @@ export default function Home() {
                         }} /></label>
                       </div>
                     )}
+                    {component.type === "action_row" && (
+                      <V2ActionRowEditor
+                        buttons={component.buttons}
+                        onChange={(newButtons) => {
+                          setCustomPayload(null);
+                          setV2Components((current) =>
+                            current.map((item) => item.id === component.id ? { ...item, buttons: newButtons } : item)
+                          );
+                        }}
+                      />
+                    )}
                   </div>
                 ))}
 
                 <div className="panel">
                   <div className="miniActions">
                     <button onClick={() => { setCustomPayload(null); setV2Components((current) => [...current, { id: id(), type: "text_display", content: "New Text Display" }]); }}>+ Add Text Display</button>
-                    <button onClick={() => { setCustomPayload(null); setV2Components((current) => [...current, { id: id(), type: "section", content: "New Section", thumbnail: "" }]); }}>+ Add Section</button>
+                    <button onClick={() => { setCustomPayload(null); setV2Components((current) => [...current, { id: id(), type: "section", content: "New Section", accessoryType: "none" as SectionAccessoryType, thumbnail: "", buttonLabel: "", buttonEmoji: "🔗", buttonButtonType: "link" as DiscordButton["buttonType"], buttonUrl: "https://discord.com", buttonCustomId: "" }]); }}>+ Add Section</button>
                     <button onClick={() => { setCustomPayload(null); setV2Components((current) => [...current, { id: id(), type: "separator", divider: true, spacing: 1 }]); }}>+ Add Separator</button>
+                    <button onClick={() => { setCustomPayload(null); setV2Components((current) => [...current, { id: id(), type: "action_row", buttons: [{ id: id(), label: "Button", emoji: "✨", buttonType: "link", url: "https://discord.com" }] }]); }}>+ Add Action Row</button>
                   </div>
                 </div>
 
@@ -559,8 +669,6 @@ export default function Home() {
                   </div>
                   <button onClick={() => setGallery((current) => [...current, { id: id(), url: "" }].slice(0, 10))}>+ Add media</button>
                 </div>
-
-                <SharedButtons buttons={buttons} setButtons={setButtons} setCustomPayload={setCustomPayload} />
               </div>
             )}
 
@@ -642,6 +750,41 @@ function SharedButtons({ buttons, setButtons, setCustomPayload }: { buttons: Dis
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function V2ActionRowEditor({ buttons, onChange }: { buttons: DiscordButton[]; onChange: (buttons: DiscordButton[]) => void }) {
+  function updateButton(buttonId: string, values: Partial<DiscordButton>) {
+    onChange(buttons.map((b) => (b.id === buttonId ? { ...b, ...values } : b)));
+  }
+
+  return (
+    <div>
+      <div className="fieldList">
+        {buttons.map((button) => (
+          <div className="fieldBox four" key={button.id}>
+            <input value={button.emoji} onChange={(e) => updateButton(button.id, { emoji: e.target.value })} placeholder="Emoji" />
+            <input value={button.label} onChange={(e) => updateButton(button.id, { label: e.target.value })} placeholder="Label" />
+            <select value={button.buttonType} onChange={(e) => updateButton(button.id, { buttonType: e.target.value as DiscordButton["buttonType"], url: undefined, customId: undefined })}>
+              <option value="link">Link</option>
+              <option value="primary">Primary</option>
+              <option value="secondary">Secondary</option>
+              <option value="success">Success</option>
+              <option value="danger">Danger</option>
+            </select>
+            {button.buttonType === "link" ? (
+              <input value={button.url ?? ""} onChange={(e) => updateButton(button.id, { url: e.target.value })} placeholder="URL" />
+            ) : (
+              <input value={button.customId ?? ""} onChange={(e) => updateButton(button.id, { customId: e.target.value })} placeholder="Custom ID" />
+            )}
+            <button onClick={() => onChange(buttons.filter((b) => b.id !== button.id))}>Remove</button>
+          </div>
+        ))}
+      </div>
+      {buttons.length < 5 && (
+        <button onClick={() => onChange([...buttons, { id: id(), label: "New Button", emoji: "✨", buttonType: "link", url: "https://discord.com" }])}>+ Add Button</button>
+      )}
     </div>
   );
 }
