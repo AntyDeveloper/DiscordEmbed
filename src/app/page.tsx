@@ -262,6 +262,7 @@ export default function Home() {
   const [mode, setMode] = useState<Mode>("embed");
   const [webhookUrl, setWebhookUrl] = useState("");
   const [status, setStatus] = useState<{ text: string; error?: boolean } | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   const [customPayload, setCustomPayload] = useState<JsonPayload | null>(null);
   const [rawJson, setRawJson] = useState("");
@@ -461,6 +462,25 @@ export default function Home() {
     }
   }
 
+  async function importJson(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text) as JsonPayload;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("The payload must be a JSON object.");
+      const formatted = JSON.stringify(parsed, null, 2);
+      setMode("json");
+      setRawJson(formatted);
+      setCustomPayload(parsed);
+      setStatus({ text: `Imported ${file.name}.` });
+    } catch (error) {
+      setStatus({ text: error instanceof Error ? `Import failed: ${error.message}` : "Import failed: invalid JSON.", error: true });
+    }
+  }
+
   function useBuilderAgain() {
     setCustomPayload(null);
     setRawJson(JSON.stringify(builderPayload, null, 2));
@@ -531,9 +551,15 @@ export default function Home() {
           withComponents: Array.isArray(payloadToSend.components)
         })
       });
-      const data = await response.json();
+      const data = await response.json() as { ok?: boolean; status?: number; error?: string; response?: unknown };
       if (!data.ok) {
-        setStatus({ text: data.error || `Discord returned ${data.status}.`, error: true });
+        const detail = typeof data.response === "string"
+          ? data.response
+          : data.response && typeof data.response === "object"
+            ? JSON.stringify(data.response)
+            : "";
+        const message = [data.status ? `Webhook error ${data.status}` : "Webhook error", data.error || "Could not send the message.", detail].filter(Boolean).join(": ");
+        setStatus({ text: message, error: true });
         return;
       }
       setStatus({ text: "Message sent." });
@@ -574,9 +600,11 @@ export default function Home() {
             <p>Create Embed V1 and Components V2 messages with live preview, JSON export, and webhook sending.</p>
           </div>
           <div className="actions">
+            <button onClick={() => importInputRef.current?.click()}>Import</button>
             <button onClick={copyJson}>Copy JSON</button>
             <button onClick={exportJson}>Export</button>
             <button className="primary" onClick={sendWebhook}>Send Webhook</button>
+            <input ref={importInputRef} className="hiddenFileInput" type="file" accept="application/json,.json" onChange={importJson} />
           </div>
         </header>
 

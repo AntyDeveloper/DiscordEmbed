@@ -111,9 +111,10 @@ pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 12px;
 .topbar h1 { margin: 0 0 4px; font-size: 22px; }
 .topbar p { margin: 0; }
 .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.hiddenFileInput { display: none; }
 .primary { background: linear-gradient(135deg, #5865f2, #7b5cff); border-color: transparent; box-shadow: 0 14px 38px rgba(88, 101, 242, .22); }
 .webhookBar { padding: 16px 26px; display: grid; grid-template-columns: 1fr auto; gap: 12px; border-bottom: 1px solid var(--line); align-items: center; }
-.status { color: #71e3a1; font-size: 13px; white-space: nowrap; }
+.status { grid-column: 1 / -1; color: #71e3a1; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; }
 .status.error { color: var(--danger); }
 .mainGrid { display: grid; grid-template-columns: minmax(430px, 1.03fr) minmax(380px, .97fr); min-height: calc(100vh - 137px); }
 .editor { border-right: 1px solid var(--line); padding: 20px 24px 34px; overflow: auto; }
