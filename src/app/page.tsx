@@ -1,9 +1,22 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type Mode = "embed" | "v2" | "json";
 type JsonPayload = Record<string, unknown>;
+type SavedState = {
+  mode?: Mode;
+  webhookUrl?: string;
+  customPayload?: JsonPayload | null;
+  rawJson?: string;
+  messageContent?: string;
+  embeds?: EmbedBlock[];
+  accent?: string;
+  v2Components?: V2Component[];
+  includeGallery?: boolean;
+  gallery?: GalleryItem[];
+  buttons?: DiscordButton[];
+};
 type DiscordButton = {
   id: string;
   label: string;
@@ -41,6 +54,7 @@ type DiscordEmoji = {
 const COMPONENTS_V2_FLAG = 1 << 15;
 const DISPLAY_TYPES = new Set([9, 10, 11, 12, 13, 14, 17]);
 const BOT_NAME = "BetterEmbeds";
+const STORAGE_KEY = "betterembeds.builderState.v1";
 const CUSTOM_EMOJI_PATTERN = /<a?:([A-Za-z0-9_]+):(\d{17,22})>/g;
 const INLINE_MARKDOWN_PATTERN = /<a?:([A-Za-z0-9_]+):(\d{17,22})>|`([^`]+)`|\*\*([^*]+)\*\*|__([^_]+)__|~~([^~]+)~~|\|\|([^|]+)\|\||\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|\*([^*]+)\*|_([^_]+)_/g;
 
@@ -445,6 +459,56 @@ export default function Home() {
     { id: id(), label: "Support", url: "https://discord.com", emoji: "💬", buttonType: "link" }
   ]);
 
+  const [isHydrated, setIsHydrated] = useState(false);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (!saved) {
+        setIsHydrated(true);
+        return;
+      }
+
+      const state = JSON.parse(saved) as SavedState;
+
+      if (state.mode === "embed" || state.mode === "v2" || state.mode === "json") setMode(state.mode);
+      if (typeof state.webhookUrl === "string") setWebhookUrl(state.webhookUrl);
+      if (state.customPayload === null || (state.customPayload && typeof state.customPayload === "object" && !Array.isArray(state.customPayload))) setCustomPayload(state.customPayload);
+      if (typeof state.rawJson === "string") setRawJson(state.rawJson);
+      if (typeof state.messageContent === "string") setMessageContent(state.messageContent);
+      if (Array.isArray(state.embeds)) setEmbeds(state.embeds);
+      if (typeof state.accent === "string") setAccent(state.accent);
+      if (Array.isArray(state.v2Components)) setV2Components(state.v2Components);
+      if (typeof state.includeGallery === "boolean") setIncludeGallery(state.includeGallery);
+      if (Array.isArray(state.gallery)) setGallery(state.gallery);
+      if (Array.isArray(state.buttons)) setButtons(state.buttons);
+    } catch {
+      localStorage.removeItem(STORAGE_KEY);
+    } finally {
+      setIsHydrated(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isHydrated) return;
+
+    const state: SavedState = {
+      mode,
+      webhookUrl,
+      customPayload,
+      rawJson,
+      messageContent,
+      embeds,
+      accent,
+      v2Components,
+      includeGallery,
+      gallery,
+      buttons
+    };
+
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  }, [accent, buttons, customPayload, embeds, gallery, includeGallery, isHydrated, messageContent, mode, rawJson, v2Components, webhookUrl]);
+
   const embedPayload = useMemo<JsonPayload>(() => {
     const builtEmbeds = embeds.slice(0, 10).map((embed) =>
       dropEmpty({
@@ -607,12 +671,28 @@ export default function Home() {
     setStatus({ text: "JSON cleared. Paste a new Discord payload whenever you want." });
   }
 
+  function loadV2BuilderFromPayload(parsed: JsonPayload) {
+    const imported = importV2Payload(parsed);
+    setMode("v2");
+    setCustomPayload(null);
+    setAccent(imported.accent);
+    setV2Components(imported.components);
+    setGallery(imported.gallery);
+    setIncludeGallery(imported.includeGallery);
+  }
+
   function applyJson() {
     try {
       const parsed = JSON.parse(rawJson) as JsonPayload;
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("The payload must be a JSON object.");
-      setCustomPayload(parsed);
-      setStatus({ text: "Custom JSON applied." });
+      if (isV2Payload(parsed)) {
+        loadV2BuilderFromPayload(parsed);
+        setRawJson(JSON.stringify(parsed, null, 2));
+        setStatus({ text: "Components V2 JSON loaded into builder." });
+      } else {
+        setCustomPayload(parsed);
+        setStatus({ text: "Custom JSON applied." });
+      }
     } catch (error) {
       setStatus({ text: error instanceof Error ? error.message : "Invalid JSON.", error: true });
     }
@@ -630,13 +710,7 @@ export default function Home() {
       const formatted = JSON.stringify(parsed, null, 2);
       setRawJson(formatted);
       if (isV2Payload(parsed)) {
-        const imported = importV2Payload(parsed);
-        setMode("v2");
-        setCustomPayload(null);
-        setAccent(imported.accent);
-        setV2Components(imported.components);
-        setGallery(imported.gallery);
-        setIncludeGallery(imported.includeGallery);
+        loadV2BuilderFromPayload(parsed);
         setStatus({ text: `Imported ${file.name} into Components V2 builder.` });
       } else {
         setMode("json");
@@ -649,6 +723,22 @@ export default function Home() {
   }
 
   function useBuilderAgain() {
+    if (trim(rawJson)) {
+      try {
+        const parsed = JSON.parse(rawJson) as JsonPayload;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("The payload must be a JSON object.");
+        if (isV2Payload(parsed)) {
+          loadV2BuilderFromPayload(parsed);
+          setRawJson(JSON.stringify(parsed, null, 2));
+          setStatus({ text: "Components V2 JSON loaded into builder." });
+          return;
+        }
+      } catch (error) {
+        setStatus({ text: error instanceof Error ? error.message : "Invalid JSON.", error: true });
+        return;
+      }
+    }
+
     setCustomPayload(null);
     setRawJson(JSON.stringify(builderPayload, null, 2));
     setStatus({ text: "Back to the visual builder." });
