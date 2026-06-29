@@ -42,6 +42,7 @@ const COMPONENTS_V2_FLAG = 1 << 15;
 const DISPLAY_TYPES = new Set([9, 10, 11, 12, 13, 14, 17]);
 const BOT_NAME = "BetterEmbeds";
 const CUSTOM_EMOJI_PATTERN = /<a?:([A-Za-z0-9_]+):(\d{17,22})>/g;
+const INLINE_MARKDOWN_PATTERN = /<a?:([A-Za-z0-9_]+):(\d{17,22})>|`([^`]+)`|\*\*([^*]+)\*\*|__([^_]+)__|~~([^~]+)~~|\|\|([^|]+)\|\||\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|\*([^*]+)\*|_([^_]+)_/g;
 
 function id() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
@@ -106,6 +107,65 @@ function renderDiscordText(text: string) {
 
   if (lastIndex < text.length) parts.push(text.slice(lastIndex));
   return parts.length ? parts : text;
+}
+
+function renderInlineMarkdown(text: string, keyPrefix: string) {
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+
+  for (const match of text.matchAll(INLINE_MARKDOWN_PATTERN)) {
+    const index = match.index ?? 0;
+    if (index > lastIndex) parts.push(text.slice(lastIndex, index));
+
+    const key = `${keyPrefix}-${index}`;
+    if (match[1] && match[2]) {
+      parts.push(renderEmoji({ name: match[1], id: match[2], animated: match[0].startsWith("<a:") }, key));
+    } else if (match[3]) {
+      parts.push(<code key={key}>{match[3]}</code>);
+    } else if (match[4]) {
+      parts.push(<strong key={key}>{renderInlineMarkdown(match[4], `${key}-bold`)}</strong>);
+    } else if (match[5]) {
+      parts.push(<u key={key}>{renderInlineMarkdown(match[5], `${key}-underline`)}</u>);
+    } else if (match[6]) {
+      parts.push(<s key={key}>{renderInlineMarkdown(match[6], `${key}-strike`)}</s>);
+    } else if (match[7]) {
+      parts.push(<span className="markdownSpoiler" key={key}>{renderInlineMarkdown(match[7], `${key}-spoiler`)}</span>);
+    } else if (match[8] && match[9]) {
+      parts.push(<a href={match[9]} target="_blank" rel="noopener noreferrer" key={key}>{renderInlineMarkdown(match[8], `${key}-link`)}</a>);
+    } else if (match[10]) {
+      parts.push(<em key={key}>{renderInlineMarkdown(match[10], `${key}-italic`)}</em>);
+    } else if (match[11]) {
+      parts.push(<em key={key}>{renderInlineMarkdown(match[11], `${key}-italic`)}</em>);
+    }
+
+    lastIndex = index + match[0].length;
+  }
+
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+  return parts.length ? parts : text;
+}
+
+function renderDiscordMarkdown(text: string) {
+  const lines = text.split(/\r?\n/);
+
+  return lines.map((line, index) => {
+    if (!line) return <br key={`line-${index}`} />;
+
+    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      const level = heading[1].length;
+      const className = level === 1 ? "markdownHeading large" : level === 2 ? "markdownHeading" : "markdownHeading small";
+      return <div className={className} key={`line-${index}`}>{renderInlineMarkdown(heading[2], `line-${index}`)}</div>;
+    }
+
+    const quote = line.match(/^>\s?(.+)$/);
+    if (quote) return <div className="markdownQuote" key={`line-${index}`}>{renderInlineMarkdown(quote[1], `line-${index}`)}</div>;
+
+    const bullet = line.match(/^[-*]\s+(.+)$/);
+    if (bullet) return <div className="markdownBullet" key={`line-${index}`}>{renderInlineMarkdown(bullet[1], `line-${index}`)}</div>;
+
+    return <span className="markdownLine" key={`line-${index}`}>{renderInlineMarkdown(line, `line-${index}`)}</span>;
+  });
 }
 
 function dropEmpty<T extends Record<string, unknown>>(object: T) {
@@ -1031,9 +1091,7 @@ function RenderComponent({ component }: { component: Record<string, unknown> }) 
 
   if (type === 10) {
     const text = textFromComponent(component);
-    const title = text.match(/^##\s+(.+)/)?.[1];
-    if (title) return <h3>{renderDiscordText(title)}</h3>;
-    return <p className="textDisplay">{renderDiscordText(stripHeading(text))}</p>;
+    return <div className="textDisplay">{renderDiscordMarkdown(text)}</div>;
   }
 
   if (type === 14) return <div className={component.divider === false ? "v2Spacer" : "v2Separator"} />;
