@@ -95,16 +95,30 @@ function prepareWebhookComponents(value: unknown): unknown {
       if (!fileUrl || fileUrl.startsWith("attachment://")) continue;
     }
 
-    if (component.accessory) {
-      const accessory = prepareWebhookAccessory(component.accessory);
-      if (accessory) component.accessory = accessory;
-      else delete component.accessory;
+    if (type === 14) {
+      const spacing = Number(component.spacing);
+      component.spacing = spacing === 2 ? 2 : 1;
+      component.divider = component.divider !== false;
     }
 
     if (Array.isArray(component.components)) {
       component.components = prepareWebhookComponents(component.components);
       if ((component.components as unknown[]).length === 0 && type === 1) continue;
     }
+
+    if (type === 9) {
+      const accessory = prepareWebhookAccessory(component.accessory);
+      if (!accessory) {
+        const children = Array.isArray(component.components) ? component.components as Record<string, unknown>[] : [];
+        output.push(...children);
+        continue;
+      }
+
+      component.accessory = accessory;
+      if (!Array.isArray(component.components) || (component.components as unknown[]).length === 0) continue;
+    }
+
+    if (type === 17 && (!Array.isArray(component.components) || (component.components as unknown[]).length === 0)) continue;
 
     output.push(component);
   }
