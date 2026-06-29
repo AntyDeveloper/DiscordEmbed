@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 
 const COMPONENTS_V2_FLAG = 1 << 15;
 const V2_COMPONENT_TYPES = new Set([9, 10, 11, 12, 13, 14, 17]);
-const INTERACTIVE_TYPES = new Set([3, 5, 6, 7, 8]);
 const WEBHOOK_USERNAME = "BetterEmbeds";
 
 function isDiscordWebhookUrl(value: string) {
@@ -52,13 +51,11 @@ function prepareWebhookAccessory(value: unknown): unknown {
   const accessory = { ...(value as Record<string, unknown>) };
   const type = Number(accessory.type);
 
-  if (INTERACTIVE_TYPES.has(type)) return undefined;
-
   if (type === 2) {
-    const style = Number(accessory.style);
-    const url = typeof accessory.url === "string" ? accessory.url.trim() : "";
-    if (style !== 5 || !url) return undefined;
-    delete accessory.custom_id;
+    if (Number(accessory.style) === 5) {
+      const url = typeof accessory.url === "string" ? accessory.url.trim() : "";
+      if (!url) return undefined;
+    }
   }
 
   if (type === 11) {
@@ -80,13 +77,11 @@ function prepareWebhookComponents(value: unknown): unknown {
     const component = { ...(item as Record<string, unknown>) };
     const type = Number(component.type);
 
-    if (INTERACTIVE_TYPES.has(type)) continue;
-
     if (type === 2) {
-      const style = Number(component.style);
-      const url = typeof component.url === "string" ? component.url.trim() : "";
-      if (style !== 5 || !url) continue;
-      delete component.custom_id;
+      if (Number(component.style) === 5) {
+        const url = typeof component.url === "string" ? component.url.trim() : "";
+        if (!url) continue;
+      }
     }
 
     if (type === 13) {
@@ -96,8 +91,7 @@ function prepareWebhookComponents(value: unknown): unknown {
     }
 
     if (type === 14) {
-      const spacing = Number(component.spacing);
-      component.spacing = spacing === 2 ? 2 : 1;
+      delete component.spacing;
       component.divider = component.divider !== false;
     }
 
@@ -124,6 +118,54 @@ function prepareWebhookComponents(value: unknown): unknown {
   }
 
   return output;
+}
+
+function unsupportedInteractiveComponents(value: unknown, path = "components"): string[] {
+  if (!Array.isArray(value)) return [];
+
+  const unsupported: string[] = [];
+
+  value.forEach((item, index) => {
+    if (!item || typeof item !== "object") return;
+
+    const component = item as Record<string, unknown>;
+    const type = Number(component.type);
+    const currentPath = `${path}[${index}]`;
+
+    if ([3, 5, 6, 7, 8].includes(type)) {
+      unsupported.push(`${currentPath}: select menu`);
+    }
+
+    if (type === 2 && Number(component.style) !== 5) {
+      unsupported.push(`${currentPath}: custom-id button`);
+    }
+
+    if (type === 2 && Number(component.style) === 5 && !String(component.url || "").trim()) {
+      unsupported.push(`${currentPath}: link button without URL`);
+    }
+
+    if (component.accessory && typeof component.accessory === "object") {
+      const accessory = component.accessory as Record<string, unknown>;
+      const accessoryType = Number(accessory.type);
+      const accessoryPath = `${currentPath}.accessory`;
+
+      if ([3, 5, 6, 7, 8].includes(accessoryType)) {
+        unsupported.push(`${accessoryPath}: select menu`);
+      }
+
+      if (accessoryType === 2 && Number(accessory.style) !== 5) {
+        unsupported.push(`${accessoryPath}: custom-id button`);
+      }
+
+      if (accessoryType === 2 && Number(accessory.style) === 5 && !String(accessory.url || "").trim()) {
+        unsupported.push(`${accessoryPath}: link button without URL`);
+      }
+    }
+
+    unsupported.push(...unsupportedInteractiveComponents(component.components, `${currentPath}.components`));
+  });
+
+  return unsupported;
 }
 
 function componentCount(value: unknown): number {
@@ -186,6 +228,18 @@ export async function POST(request: NextRequest) {
     let discordPayload: Record<string, unknown>;
 
     if (usesV2) {
+      const unsupported = unsupportedInteractiveComponents(normalized.components);
+      if (unsupported.length) {
+        return NextResponse.json(
+          {
+            ok: false,
+            status: 400,
+            error: `Discord webhooks can only send link buttons. Select menus and custom-id buttons require a Discord app interaction endpoint. Unsupported: ${unsupported.join(", ")}`
+          },
+          { status: 400 }
+        );
+      }
+
       const components = prepareWebhookComponents(normalized.components);
 
       if (!Array.isArray(components) || components.length === 0) {
@@ -206,6 +260,18 @@ export async function POST(request: NextRequest) {
         components
       };
     } else {
+      const unsupported = unsupportedInteractiveComponents(normalized.components);
+      if (unsupported.length) {
+        return NextResponse.json(
+          {
+            ok: false,
+            status: 400,
+            error: `Discord webhooks can only send link buttons. Select menus and custom-id buttons require a Discord app interaction endpoint. Unsupported: ${unsupported.join(", ")}`
+          },
+          { status: 400 }
+        );
+      }
+
       const components = Array.isArray(normalized.components) ? prepareWebhookComponents(normalized.components) : undefined;
       discordPayload = { ...normalized, username: WEBHOOK_USERNAME };
       if (Array.isArray(normalized.embeds)) discordPayload.embeds = normalizeEmbeds(normalized.embeds);
