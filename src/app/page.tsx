@@ -162,6 +162,7 @@ function defaultEmbed(): EmbedBlock {
 type SectionAccessoryType = "none" | "thumbnail" | "button";
 type V2Component =
   | { id: string; type: "text_display"; content: string }
+  | { id: string; type: "logo"; url: string; description: string }
   | {
       id: string;
       type: "section";
@@ -272,6 +273,14 @@ export default function Home() {
     for (const component of v2Components) {
       if (component.type === "text_display") {
         container.push({ type: 10, content: trim(component.content) || "Write your message here." });
+      } else if (component.type === "logo") {
+        const url = trim(component.url);
+        if (url) {
+          container.push({
+            type: 12,
+            items: [{ media: { url }, description: trim(component.description) ? `Centered logo: ${trim(component.description)}` : "Centered logo" }]
+          });
+        }
       } else if (component.type === "separator") {
         container.push({ type: 14, divider: component.divider, spacing: component.spacing });
       } else if (component.type === "section") {
@@ -591,7 +600,7 @@ export default function Home() {
                   <div className="panelHead">
                     <div>
                       <h2>Components V2</h2>
-                      <p>Container with Text Display, Separator, Section, Thumbnail, Media Gallery and Action Row. Buttons can be placed anywhere.</p>
+                      <p>Container with Text Display, Logo, Separator, Section, Thumbnail, Media Gallery, Action Row and Select Menu.</p>
                     </div>
                   </div>
                   <label>Accent color<input type="color" value={accent} onChange={(event) => { setCustomPayload(null); setAccent(event.target.value); }} /></label>
@@ -645,6 +654,7 @@ export default function Home() {
                         <div>
                           <h2>
                             {component.type === "text_display" ? "Text Display"
+                              : component.type === "logo" ? "Logo"
                               : component.type === "section" ? "Section"
                               : component.type === "action_row" ? "Action Row (Buttons)"
                               : component.type === "select_menu" ? "Select Menu"
@@ -652,6 +662,7 @@ export default function Home() {
                           </h2>
                           <p>
                             {component.type === "text_display" ? "Markdown supported"
+                              : component.type === "logo" ? "Centered image"
                               : component.type === "section" ? "Text with optional accessory"
                               : component.type === "action_row" ? `${component.buttons.length}/5 buttons`
                               : component.type === "select_menu" ? `${component.options.length}/25 options`
@@ -668,6 +679,18 @@ export default function Home() {
                         setCustomPayload(null);
                         setV2Components((current) => current.map((item) => item.id === component.id ? { ...item, content: event.target.value } : item));
                       }} /></label>
+                    )}
+                    {component.type === "logo" && (
+                      <div className="formGrid two">
+                        <label>Logo URL<input value={component.url} onChange={(event) => {
+                          setCustomPayload(null);
+                          setV2Components((current) => current.map((item) => item.id === component.id ? { ...item, url: event.target.value } : item));
+                        }} placeholder="https://..." /></label>
+                        <label>Description<input value={component.description} onChange={(event) => {
+                          setCustomPayload(null);
+                          setV2Components((current) => current.map((item) => item.id === component.id ? { ...item, description: event.target.value } : item));
+                        }} placeholder="Centered logo" /></label>
+                      </div>
                     )}
                     {component.type === "section" && (
                       <>
@@ -751,6 +774,7 @@ export default function Home() {
                 <div className="panel">
                   <div className="miniActions">
                     <button onClick={() => { setCustomPayload(null); setV2Components((current) => [...current, { id: id(), type: "text_display", content: "New Text Display" }]); }}>+ Add Text Display</button>
+                    <button onClick={() => { setCustomPayload(null); setV2Components((current) => [...current, { id: id(), type: "logo", url: "", description: "Centered logo" }]); }}>+ Add Logo</button>
                     <button onClick={() => { setCustomPayload(null); setV2Components((current) => [...current, { id: id(), type: "section", content: "New Section", accessoryType: "none" as SectionAccessoryType, thumbnail: "", buttonLabel: "", buttonEmoji: "🔗", buttonButtonType: "link" as DiscordButton["buttonType"], buttonUrl: "https://discord.com", buttonCustomId: "" }]); }}>+ Add Section</button>
                     <button onClick={() => { setCustomPayload(null); setV2Components((current) => [...current, { id: id(), type: "separator", divider: true, spacing: 1 }]); }}>+ Add Separator</button>
                     <button onClick={() => { setCustomPayload(null); setV2Components((current) => [...current, { id: id(), type: "action_row", buttons: [{ id: id(), label: "Button", emoji: "✨", buttonType: "link", url: "https://discord.com" }] }]); }}>+ Add Action Row</button>
@@ -1027,6 +1051,19 @@ function RenderComponent({ component }: { component: Record<string, unknown> }) 
 
   if (type === 12) {
     const items = Array.isArray(component.items) ? component.items as Record<string, unknown>[] : [];
+    const firstItem = items[0];
+    const firstMedia = firstItem?.media && typeof firstItem.media === "object" ? firstItem.media as Record<string, unknown> : {};
+    const firstUrl = typeof firstMedia.url === "string" ? firstMedia.url : "";
+    const firstDescription = typeof firstItem?.description === "string" ? firstItem.description : "";
+
+    if (items.length === 1 && firstUrl && firstDescription.toLowerCase().startsWith("centered logo")) {
+      return (
+        <div className="logoPreview">
+          <img src={firstUrl} alt={firstDescription.replace(/^Centered logo:?\s*/i, "") || "Logo"} />
+        </div>
+      );
+    }
+
     return (
       <div className="galleryGrid">
         {items.slice(0, 10).map((item, index) => {
