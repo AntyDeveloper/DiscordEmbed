@@ -12,6 +12,13 @@ type DiscordButton = {
   url?: string;
   customId?: string;
 };
+type SelectMenuOption = {
+  id: string;
+  label: string;
+  value: string;
+  description: string;
+  emoji: string;
+};
 type GalleryItem = { id: string; url: string };
 type EmbedField = { id: string; name: string; value: string; inline: boolean };
 type EmbedBlock = {
@@ -25,10 +32,16 @@ type EmbedBlock = {
   footer: string;
   fields: EmbedField[];
 };
+type DiscordEmoji = {
+  name: string;
+  id?: string;
+  animated?: boolean;
+};
 
 const COMPONENTS_V2_FLAG = 1 << 15;
 const DISPLAY_TYPES = new Set([9, 10, 11, 12, 13, 14, 17]);
 const BOT_NAME = "BetterEmbeds";
+const CUSTOM_EMOJI_PATTERN = /<a?:([A-Za-z0-9_]+):(\d{17,22})>/g;
 
 function id() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
@@ -49,9 +62,50 @@ function numberToHex(value: unknown) {
   return `#${value.toString(16).padStart(6, "0").slice(-6)}`;
 }
 
-function emoji(value: string) {
+function emoji(value: string): DiscordEmoji | undefined {
   const name = trim(value);
-  return name ? { name } : undefined;
+  if (!name) return undefined;
+
+  const custom = name.match(/^<(a?):([A-Za-z0-9_]+):(\d{17,22})>$/);
+  if (custom) return { name: custom[2], id: custom[3], animated: custom[1] === "a" };
+
+  return { name };
+}
+
+function customEmojiUrl(emoji: DiscordEmoji) {
+  if (!emoji.id) return "";
+  return `https://cdn.discordapp.com/emojis/${emoji.id}.${emoji.animated ? "gif" : "webp"}?quality=lossless`;
+}
+
+function emojiFromRecord(value: unknown): DiscordEmoji | null {
+  if (!value || typeof value !== "object") return null;
+  const data = value as Record<string, unknown>;
+  const name = typeof data.name === "string" ? data.name : "";
+  const emojiId = typeof data.id === "string" ? data.id : "";
+  const animated = data.animated === true;
+  return name || emojiId ? { name, id: emojiId || undefined, animated } : null;
+}
+
+function renderEmoji(emojiValue: DiscordEmoji | null, key?: string) {
+  if (!emojiValue) return null;
+  const url = customEmojiUrl(emojiValue);
+  if (url) return <img className="customEmoji" src={url} alt={`:${emojiValue.name}:`} title={`:${emojiValue.name}:`} key={key} />;
+  return <span key={key}>{emojiValue.name}</span>;
+}
+
+function renderDiscordText(text: string) {
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+
+  for (const match of text.matchAll(CUSTOM_EMOJI_PATTERN)) {
+    const index = match.index ?? 0;
+    if (index > lastIndex) parts.push(text.slice(lastIndex, index));
+    parts.push(renderEmoji({ name: match[1], id: match[2], animated: match[0].startsWith("<a:") }, `emoji-${index}-${match[2]}`));
+    lastIndex = index + match[0].length;
+  }
+
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+  return parts.length ? parts : text;
 }
 
 function dropEmpty<T extends Record<string, unknown>>(object: T) {
@@ -121,7 +175,16 @@ type V2Component =
       buttonCustomId: string;
     }
   | { id: string; type: "separator"; divider: boolean; spacing: number }
-  | { id: string; type: "action_row"; buttons: DiscordButton[] };
+  | { id: string; type: "action_row"; buttons: DiscordButton[] }
+  | {
+      id: string;
+      type: "select_menu";
+      customId: string;
+      placeholder: string;
+      minValues: number;
+      maxValues: number;
+      options: SelectMenuOption[];
+    };
 
 function getButtonStyle(buttonType: DiscordButton["buttonType"]) {
   switch (buttonType) {
@@ -245,6 +308,36 @@ export default function Home() {
           .slice(0, 5);
         if (rowButtons.length) {
           container.push({ type: 1, components: rowButtons });
+        }
+      } else if (component.type === "select_menu") {
+        const options = component.options
+          .map((option, index) =>
+            dropEmpty({
+              label: trim(option.label) || `Option ${index + 1}`,
+              value: trim(option.value) || trim(option.label) || `option_${index + 1}`,
+              description: trim(option.description) || undefined,
+              emoji: emoji(option.emoji)
+            })
+          )
+          .slice(0, 25);
+
+        if (options.length) {
+          const maxValues = Math.max(1, Math.min(Number(component.maxValues) || 1, options.length));
+          const minValues = Math.max(0, Math.min(Number(component.minValues) || 1, maxValues));
+
+          container.push({
+            type: 1,
+            components: [
+              dropEmpty({
+                type: 3,
+                custom_id: trim(component.customId) || id(),
+                placeholder: trim(component.placeholder) || "Select an option",
+                min_values: minValues,
+                max_values: maxValues,
+                options
+              })
+            ]
+          });
         }
       }
     }
@@ -554,12 +647,14 @@ export default function Home() {
                             {component.type === "text_display" ? "Text Display"
                               : component.type === "section" ? "Section"
                               : component.type === "action_row" ? "Action Row (Buttons)"
+                              : component.type === "select_menu" ? "Select Menu"
                               : "Separator"}
                           </h2>
                           <p>
                             {component.type === "text_display" ? "Markdown supported"
                               : component.type === "section" ? "Text with optional accessory"
                               : component.type === "action_row" ? `${component.buttons.length}/5 buttons`
+                              : component.type === "select_menu" ? `${component.options.length}/25 options`
                               : "Visual break"}
                           </p>
                         </div>
@@ -639,6 +734,17 @@ export default function Home() {
                         }}
                       />
                     )}
+                    {component.type === "select_menu" && (
+                      <V2SelectMenuEditor
+                        menu={component}
+                        onChange={(updatedMenu) => {
+                          setCustomPayload(null);
+                          setV2Components((current) =>
+                            current.map((item) => item.id === component.id ? updatedMenu : item)
+                          );
+                        }}
+                      />
+                    )}
                   </div>
                 ))}
 
@@ -648,6 +754,7 @@ export default function Home() {
                     <button onClick={() => { setCustomPayload(null); setV2Components((current) => [...current, { id: id(), type: "section", content: "New Section", accessoryType: "none" as SectionAccessoryType, thumbnail: "", buttonLabel: "", buttonEmoji: "🔗", buttonButtonType: "link" as DiscordButton["buttonType"], buttonUrl: "https://discord.com", buttonCustomId: "" }]); }}>+ Add Section</button>
                     <button onClick={() => { setCustomPayload(null); setV2Components((current) => [...current, { id: id(), type: "separator", divider: true, spacing: 1 }]); }}>+ Add Separator</button>
                     <button onClick={() => { setCustomPayload(null); setV2Components((current) => [...current, { id: id(), type: "action_row", buttons: [{ id: id(), label: "Button", emoji: "✨", buttonType: "link", url: "https://discord.com" }] }]); }}>+ Add Action Row</button>
+                    <button onClick={() => { setCustomPayload(null); setV2Components((current) => [...current, { id: id(), type: "select_menu", customId: "", placeholder: "Choose an option", minValues: 1, maxValues: 1, options: [{ id: id(), label: "First option", value: "first_option", description: "", emoji: "" }, { id: id(), label: "Second option", value: "second_option", description: "", emoji: "" }] }]); }}>+ Add Select Menu</button>
                   </div>
                 </div>
 
@@ -789,6 +896,47 @@ function V2ActionRowEditor({ buttons, onChange }: { buttons: DiscordButton[]; on
   );
 }
 
+function V2SelectMenuEditor({ menu, onChange }: { menu: Extract<V2Component, { type: "select_menu" }>; onChange: (menu: Extract<V2Component, { type: "select_menu" }>) => void }) {
+  function updateMenu(values: Partial<Extract<V2Component, { type: "select_menu" }>>) {
+    onChange({ ...menu, ...values });
+  }
+
+  function updateOption(optionId: string, values: Partial<SelectMenuOption>) {
+    updateMenu({ options: menu.options.map((option) => option.id === optionId ? { ...option, ...values } : option) });
+  }
+
+  return (
+    <div className="fieldList">
+      <div className="formGrid two">
+        <label>Placeholder<input value={menu.placeholder} onChange={(event) => updateMenu({ placeholder: event.target.value })} placeholder="Choose an option" /></label>
+        <label>Custom ID<input value={menu.customId} onChange={(event) => updateMenu({ customId: event.target.value })} placeholder="select_menu_id" /></label>
+      </div>
+      <div className="formGrid two">
+        <label>Min values<input type="number" min={0} max={25} value={menu.minValues} onChange={(event) => updateMenu({ minValues: Number(event.target.value) })} /></label>
+        <label>Max values<input type="number" min={1} max={25} value={menu.maxValues} onChange={(event) => updateMenu({ maxValues: Number(event.target.value) })} /></label>
+      </div>
+      <div className="subHead">
+        <h3>Options</h3>
+        <button
+          onClick={() => updateMenu({ options: [...menu.options, { id: id(), label: "New option", value: `option_${menu.options.length + 1}`, description: "", emoji: "" }].slice(0, 25) })}
+          disabled={menu.options.length >= 25}
+        >
+          + Option
+        </button>
+      </div>
+      {menu.options.map((option) => (
+        <div className="fieldBox five" key={option.id}>
+          <input value={option.emoji} onChange={(event) => updateOption(option.id, { emoji: event.target.value })} placeholder="Emoji" />
+          <input value={option.label} onChange={(event) => updateOption(option.id, { label: event.target.value })} placeholder="Label" />
+          <input value={option.value} onChange={(event) => updateOption(option.id, { value: event.target.value })} placeholder="Value" />
+          <input value={option.description} onChange={(event) => updateOption(option.id, { description: event.target.value })} placeholder="Description" />
+          <button onClick={() => updateMenu({ options: menu.options.filter((item) => item.id !== option.id) })} disabled={menu.options.length <= 1}>Remove</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function PayloadPreview({ payload }: { payload: JsonPayload }) {
   if (typeof payload.content === "string" && payload.content.trim()) {
     return <><p className="messageContent">{payload.content}</p><PayloadBody payload={payload} /></>;
@@ -860,8 +1008,8 @@ function RenderComponent({ component }: { component: Record<string, unknown> }) 
   if (type === 10) {
     const text = textFromComponent(component);
     const title = text.match(/^##\s+(.+)/)?.[1];
-    if (title) return <h3>{title}</h3>;
-    return <p className="textDisplay">{stripHeading(text)}</p>;
+    if (title) return <h3>{renderDiscordText(title)}</h3>;
+    return <p className="textDisplay">{renderDiscordText(stripHeading(text))}</p>;
   }
 
   if (type === 14) return <div className={component.divider === false ? "v2Spacer" : "v2Separator"} />;
@@ -903,7 +1051,7 @@ function RenderComponent({ component }: { component: Record<string, unknown> }) 
 
   if (type === 2) {
     const label = typeof component.label === "string" ? component.label : "Button";
-    const e = component.emoji && typeof component.emoji === "object" ? (component.emoji as Record<string, unknown>).name : "";
+    const e = renderEmoji(emojiFromRecord(component.emoji));
     const style = Number(component.style);
     const url = typeof component.url === "string" ? component.url : "";
     const customId = typeof component.custom_id === "string" ? component.custom_id : "";
@@ -911,15 +1059,16 @@ function RenderComponent({ component }: { component: Record<string, unknown> }) 
     const buttonClass = `discordButton style-${style}`;
 
     if (style === 5) { // Link button
-      return <a href={url} target="_blank" rel="noopener noreferrer" className={buttonClass}>{String(e || "")} {label}</a>;
+      return <a href={url} target="_blank" rel="noopener noreferrer" className={buttonClass}>{e}{label}</a>;
     } else { // Interactive button
-      return <button className={buttonClass}>{String(e || "")} {label}</button>;
+      return <button className={buttonClass}>{e}{label}</button>;
     }
   }
 
   if ([3, 5, 6, 7, 8].includes(type)) {
     const placeholder = typeof component.placeholder === "string" ? component.placeholder : "Select an option";
-    return <div className="selectBox">{placeholder}</div>;
+    const options = Array.isArray(component.options) ? component.options as Record<string, unknown>[] : [];
+    return <div className="selectBox"><span>{placeholder}</span><small>{options.length ? `${options.length} options` : "Select"}</small></div>;
   }
 
   return <div className="unknownBox">Component type {type || "unknown"}</div>;
