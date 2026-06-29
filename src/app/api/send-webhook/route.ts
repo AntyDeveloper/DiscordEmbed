@@ -46,6 +46,30 @@ function stripUndefined(value: unknown): unknown {
   return value === undefined ? undefined : value;
 }
 
+function prepareWebhookAccessory(value: unknown): unknown {
+  if (!value || typeof value !== "object") return undefined;
+
+  const accessory = { ...(value as Record<string, unknown>) };
+  const type = Number(accessory.type);
+
+  if (INTERACTIVE_TYPES.has(type)) return undefined;
+
+  if (type === 2) {
+    const style = Number(accessory.style);
+    const url = typeof accessory.url === "string" ? accessory.url.trim() : "";
+    if (style !== 5 || !url) return undefined;
+    delete accessory.custom_id;
+  }
+
+  if (type === 11) {
+    const media = accessory.media;
+    const mediaUrl = media && typeof media === "object" ? String((media as Record<string, unknown>).url || "") : "";
+    if (!mediaUrl) return undefined;
+  }
+
+  return accessory;
+}
+
 function prepareWebhookComponents(value: unknown): unknown {
   if (!Array.isArray(value)) return [];
 
@@ -69,6 +93,12 @@ function prepareWebhookComponents(value: unknown): unknown {
       const file = component.file;
       const fileUrl = file && typeof file === "object" ? String((file as Record<string, unknown>).url || "") : "";
       if (!fileUrl || fileUrl.startsWith("attachment://")) continue;
+    }
+
+    if (component.accessory) {
+      const accessory = prepareWebhookAccessory(component.accessory);
+      if (accessory) component.accessory = accessory;
+      else delete component.accessory;
     }
 
     if (Array.isArray(component.components)) {

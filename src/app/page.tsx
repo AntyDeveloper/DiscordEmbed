@@ -258,6 +258,162 @@ function getButtonStyle(buttonType: DiscordButton["buttonType"]) {
   }
 }
 
+function buttonTypeFromStyle(value: unknown): DiscordButton["buttonType"] {
+  switch (Number(value)) {
+    case 1: return "primary";
+    case 2: return "secondary";
+    case 3: return "success";
+    case 4: return "danger";
+    case 5: return "link";
+    default: return "primary";
+  }
+}
+
+function emojiInput(value: unknown) {
+  const data = emojiFromRecord(value);
+  if (!data) return "";
+  if (data.id) return `<${data.animated ? "a" : ""}:${data.name}:${data.id}>`;
+  return data.name;
+}
+
+function mediaUrl(value: unknown) {
+  if (!value || typeof value !== "object") return "";
+  const media = (value as Record<string, unknown>).media;
+  if (!media || typeof media !== "object") return "";
+  const url = (media as Record<string, unknown>).url;
+  return typeof url === "string" ? url : "";
+}
+
+function importButton(component: Record<string, unknown>): DiscordButton {
+  const buttonType = buttonTypeFromStyle(component.style);
+  return {
+    id: id(),
+    label: typeof component.label === "string" ? component.label : "Button",
+    emoji: emojiInput(component.emoji),
+    buttonType,
+    url: buttonType === "link" && typeof component.url === "string" ? component.url : undefined,
+    customId: buttonType !== "link" && typeof component.custom_id === "string" ? component.custom_id : undefined
+  };
+}
+
+function importV2Payload(payload: JsonPayload) {
+  const roots = Array.isArray(payload.components) ? payload.components as Record<string, unknown>[] : [];
+  const components: V2Component[] = [];
+  const gallery: GalleryItem[] = [];
+  let accent = "#5865F2";
+
+  function importComponent(component: Record<string, unknown>) {
+    const type = Number(component.type);
+
+    if (type === 17) {
+      accent = numberToHex(component.accent_color);
+      const children = Array.isArray(component.components) ? component.components as Record<string, unknown>[] : [];
+      children.forEach(importComponent);
+      return;
+    }
+
+    if (type === 10) {
+      components.push({ id: id(), type: "text_display", content: textFromComponent(component) });
+      return;
+    }
+
+    if (type === 12) {
+      const items = Array.isArray(component.items) ? component.items as Record<string, unknown>[] : [];
+      const firstDescription = typeof items[0]?.description === "string" ? items[0].description : "";
+      const firstUrl = mediaUrl(items[0]);
+      if (items.length === 1 && firstUrl && firstDescription.toLowerCase().startsWith("centered logo")) {
+        components.push({ id: id(), type: "logo", url: firstUrl, description: firstDescription.replace(/^Centered logo:?\s*/i, "") || "Centered logo" });
+        return;
+      }
+      for (const item of items) {
+        const url = mediaUrl(item);
+        if (url) gallery.push({ id: id(), url });
+      }
+      return;
+    }
+
+    if (type === 14) {
+      components.push({
+        id: id(),
+        type: "separator",
+        divider: component.divider !== false,
+        spacing: typeof component.spacing === "number" ? component.spacing : 1
+      });
+      return;
+    }
+
+    if (type === 9) {
+      const children = Array.isArray(component.components) ? component.components as Record<string, unknown>[] : [];
+      const textComponent = children.find((child) => Number(child.type) === 10);
+      const accessory = component.accessory && typeof component.accessory === "object" ? component.accessory as Record<string, unknown> : null;
+      const base = {
+        id: id(),
+        type: "section" as const,
+        content: textComponent ? textFromComponent(textComponent) : "",
+        thumbnail: "",
+        buttonLabel: "",
+        buttonEmoji: "",
+        buttonButtonType: "link" as DiscordButton["buttonType"],
+        buttonUrl: "",
+        buttonCustomId: ""
+      };
+
+      if (Number(accessory?.type) === 11) {
+        components.push({ ...base, accessoryType: "thumbnail", thumbnail: mediaUrl(accessory) });
+      } else if (Number(accessory?.type) === 2 && accessory) {
+        const button = importButton(accessory);
+        components.push({
+          ...base,
+          accessoryType: "button",
+          buttonLabel: button.label,
+          buttonEmoji: button.emoji,
+          buttonButtonType: button.buttonType,
+          buttonUrl: button.url || "",
+          buttonCustomId: button.customId || ""
+        });
+      } else {
+        components.push({ ...base, accessoryType: "none" });
+      }
+      return;
+    }
+
+    if (type === 1) {
+      const children = Array.isArray(component.components) ? component.components as Record<string, unknown>[] : [];
+      const buttons = children.filter((child) => Number(child.type) === 2).map(importButton).slice(0, 5);
+      const select = children.find((child) => Number(child.type) === 3);
+
+      if (buttons.length) {
+        components.push({ id: id(), type: "action_row", buttons });
+      } else if (select) {
+        const options = Array.isArray(select.options) ? select.options as Record<string, unknown>[] : [];
+        components.push({
+          id: id(),
+          type: "select_menu",
+          customId: typeof select.custom_id === "string" ? select.custom_id : "",
+          placeholder: typeof select.placeholder === "string" ? select.placeholder : "Choose an option",
+          minValues: typeof select.min_values === "number" ? select.min_values : 1,
+          maxValues: typeof select.max_values === "number" ? select.max_values : 1,
+          options: options.map((option, index) => ({
+            id: id(),
+            label: typeof option.label === "string" ? option.label : `Option ${index + 1}`,
+            value: typeof option.value === "string" ? option.value : `option_${index + 1}`,
+            description: typeof option.description === "string" ? option.description : "",
+            emoji: emojiInput(option.emoji)
+          })).slice(0, 25)
+        });
+      }
+    }
+  }
+
+  roots.forEach(importComponent);
+  return {
+    accent,
+    components: components.length ? components : [{ id: id(), type: "text_display" as const, content: "" }],
+    gallery,
+    includeGallery: gallery.length > 0
+  };
+}
+
 export default function Home() {
   const [mode, setMode] = useState<Mode>("embed");
   const [webhookUrl, setWebhookUrl] = useState("");
@@ -472,10 +628,21 @@ export default function Home() {
       const parsed = JSON.parse(text) as JsonPayload;
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("The payload must be a JSON object.");
       const formatted = JSON.stringify(parsed, null, 2);
-      setMode("json");
       setRawJson(formatted);
-      setCustomPayload(parsed);
-      setStatus({ text: `Imported ${file.name}.` });
+      if (isV2Payload(parsed)) {
+        const imported = importV2Payload(parsed);
+        setMode("v2");
+        setCustomPayload(null);
+        setAccent(imported.accent);
+        setV2Components(imported.components);
+        setGallery(imported.gallery);
+        setIncludeGallery(imported.includeGallery);
+        setStatus({ text: `Imported ${file.name} into Components V2 builder.` });
+      } else {
+        setMode("json");
+        setCustomPayload(parsed);
+        setStatus({ text: `Imported ${file.name}.` });
+      }
     } catch (error) {
       setStatus({ text: error instanceof Error ? `Import failed: ${error.message}` : "Import failed: invalid JSON.", error: true });
     }
